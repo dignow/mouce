@@ -55,7 +55,7 @@ mod tests {
             target_os = "netbsd",
             target_os = "openbsd"
         ))]
-        Mouse::new((0, 1920), (0, 1080));
+        Mouse::new((0, 1920), (0, 1080)).unwrap();
         #[cfg(not(any(
             target_os = "linux",
             target_os = "dragonfly",

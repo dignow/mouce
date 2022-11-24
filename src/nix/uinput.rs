@@ -114,7 +114,7 @@ impl UInputMouseManager {
                 ),
             ));
         }
-        usetup.name[..name_bytes.len()].copy_from_slice(name_bytes);
+        usetup.name[..name_bytes.len()].copy_from_slice(name_bytes as _);
 
         unsafe {
             ioctl(fd, UI_DEV_SETUP, &usetup);
