@@ -29,18 +29,6 @@ pub mod common;
 
 pub use common::MouseActions;
 
-/// SAFETY: T must not have any padding or otherwise uninitialized bytes inside of it
-#[cfg(any(
-target_os = "linux",
-target_os = "dragonfly",
-target_os = "freebsd",
-target_os = "netbsd",
-target_os = "openbsd"
-))]
-pub(crate) unsafe fn cast_to_bytes<T: ?Sized>(mem: &T) -> &[u8] {
-    std::slice::from_raw_parts(mem as *const T as *const u8, std::mem::size_of_val(mem))
-}
-
 #[cfg(test)]
 mod tests {
     use crate::Mouse;
@@ -56,13 +44,5 @@ mod tests {
             target_os = "openbsd"
         ))]
         Mouse::new((0, 1920), (0, 1080)).unwrap();
-        #[cfg(not(any(
-            target_os = "linux",
-            target_os = "dragonfly",
-            target_os = "freebsd",
-            target_os = "netbsd",
-            target_os = "openbsd"
-        )))]
-        Mouse::new();
     }
 }

@@ -9,15 +9,18 @@ use crate::common::{CallbackId, MouseActions, MouseButton, MouseEvent, ScrollDir
 use std::{
     collections::HashMap,
     fs::File,
-    io::{Error, ErrorKind, Result, Write},
+    io::{Error, ErrorKind, Result},
+    mem::size_of,
     os::{
-        raw::{c_int, c_uint, c_ulong, c_ushort},
+        raw::{c_char, c_int, c_long, c_uint, c_ulong, c_ushort},
         unix::{fs::OpenOptionsExt, io::AsRawFd},
     },
     sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
+
+const UINPUT_MAX_NAME_SIZE: usize = 80;
 
 pub struct UInputMouseManager {
     uinput_file: File,
@@ -51,9 +54,9 @@ impl UInputMouseManager {
             ioctl(
                 fd,
                 UI_ABS_SETUP,
-                &libc::uinput_abs_setup {
+                &UinputAbsSetup {
                     code: ABS_X as _,
-                    absinfo: libc::input_absinfo {
+                    absinfo: InputAbsinfo {
                         value: 0,
                         minimum: rng_x.0,
                         maximum: rng_x.1,
@@ -67,9 +70,9 @@ impl UInputMouseManager {
             ioctl(
                 fd,
                 UI_ABS_SETUP,
-                &libc::uinput_abs_setup {
+                &UinputAbsSetup {
                     code: ABS_Y as _,
-                    absinfo: libc::input_absinfo {
+                    absinfo: InputAbsinfo {
                         value: 0,
                         minimum: rng_y.0,
                         maximum: rng_y.1,
@@ -86,35 +89,29 @@ impl UInputMouseManager {
             ioctl(fd, UI_SET_RELBIT, REL_WHEEL);
         }
 
-        let mut usetup = libc::uinput_setup {
-            id: libc::input_id {
+        let mut usetup = UInputSetup {
+            id: InputId {
                 bustype: BUS_USB,
+                // Random vendor and product
                 vendor: 0x2222,
                 product: 0x3333,
                 version: 0,
             },
-            name: [0; libc::UINPUT_MAX_NAME_SIZE],
+            name: [0; UINPUT_MAX_NAME_SIZE],
             ff_effects_max: 0,
         };
 
-        // SAFETY: either casting [u8] to [u8], or [u8] to [i8], which is the same size
-        let name_bytes =
-            unsafe { &*("Mouce Lib Fake Mouse".as_ref() as *const [u8] as *const [i8]) };
-        // Panic if we're doing something really stupid
-        // + 1 for the null terminator; usetup.name was zero-initialized so there will be null
-        // bytes after the part we copy into
-        assert!(name_bytes.len() + 1 < libc::UINPUT_MAX_NAME_SIZE);
-        if name_bytes.len() + 1 >= libc::UINPUT_MAX_NAME_SIZE {
-            return Err(Error::new(
-                ErrorKind::Other,
-                format!(
-                    "uinput name too long {}, >= {}",
-                    name_bytes.len(),
-                    libc::UINPUT_MAX_NAME_SIZE - 1
-                ),
-            ));
+        let mut device_bytes: Vec<c_char> = "mouce-library-fake-mouse"
+            .chars()
+            .map(|ch| ch as c_char)
+            .collect();
+
+        // Fill the rest of the name buffer with empty chars
+        for _ in 0..UINPUT_MAX_NAME_SIZE - device_bytes.len() {
+            device_bytes.push('\0' as c_char);
         }
-        usetup.name[..name_bytes.len()].copy_from_slice(name_bytes as _);
+
+        usetup.name.copy_from_slice(&device_bytes);
 
         unsafe {
             ioctl(fd, UI_DEV_SETUP, &usetup);
@@ -130,24 +127,36 @@ impl UInputMouseManager {
         Ok(manager)
     }
 
-    #[inline]
-    fn write_raw(&mut self, messages: &[libc::input_event]) -> Result<()> {
-        let bytes = unsafe { crate::cast_to_bytes(messages) };
-        self.uinput_file.write_all(bytes)
-    }
-
     /// Write the given event to the uinput file
     fn emit(&mut self, r#type: c_int, code: c_int, value: c_int) -> Result<()> {
-        let event = libc::input_event {
-            time: libc::timeval {
+        let mut event = InputEvent {
+            time: TimeVal {
                 tv_sec: 0,
                 tv_usec: 0,
             },
-            type_: r#type as u16,
+            r#type: r#type as u16,
             code: code as u16,
             value,
         };
-        self.write_raw(&[event])
+        let fd = self.uinput_file.as_raw_fd();
+
+        unsafe {
+            let count = size_of::<InputEvent>();
+            let written_bytes = write(fd, &mut event, count);
+            if written_bytes == -1 {
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    format!("failed while trying to write to a file"),
+                ));
+            } else if written_bytes != count as c_long {
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    format!("failed while trying to write to a file"),
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     /// Syncronize the device
@@ -305,6 +314,53 @@ const SYN_REPORT: c_int = 0x00;
 const EV_SYN: c_int = 0x00;
 const BUS_USB: c_ushort = 0x03;
 
+/// uinput types
+#[repr(C)]
+struct UInputSetup {
+    id: InputId,
+    name: [c_char; UINPUT_MAX_NAME_SIZE],
+    ff_effects_max: c_ulong,
+}
+
+#[repr(C)]
+struct InputId {
+    bustype: c_ushort,
+    vendor: c_ushort,
+    product: c_ushort,
+    version: c_ushort,
+}
+
+#[repr(C)]
+pub struct InputEvent {
+    pub time: TimeVal,
+    pub r#type: u16,
+    pub code: u16,
+    pub value: c_int,
+}
+
+#[repr(C)]
+pub struct TimeVal {
+    pub tv_sec: c_ulong,
+    pub tv_usec: c_ulong,
+}
+
+#[repr(C)]
+pub struct UinputAbsSetup {
+    pub code: c_ushort,
+    pub absinfo: InputAbsinfo,
+}
+
+#[repr(C)]
+pub struct InputAbsinfo {
+    pub value: c_int,
+    pub minimum: c_int,
+    pub maximum: c_int,
+    pub fuzz: c_int,
+    pub flat: c_int,
+    pub resolution: c_int,
+}
+
 extern "C" {
     fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
+    fn write(fd: c_int, buf: *mut InputEvent, count: usize) -> c_long;
 }
