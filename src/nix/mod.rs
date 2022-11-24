@@ -4,7 +4,8 @@
 ///
 use crate::common::{CallbackId, MouseActions, MouseButton, MouseEvent, ScrollDirection};
 use crate::nix::uinput::{
-    BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_KEY, EV_REL, REL_HWHEEL, REL_WHEEL, REL_X, REL_Y,
+    InputEvent, TimeVal, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_KEY, EV_REL, REL_HWHEEL, REL_WHEEL,
+    REL_X, REL_Y,
 };
 use glob::glob;
 use std::{
@@ -82,21 +83,17 @@ fn start_nix_listener(
         // Create a thread for this mouse-event file
         let tx = tx.clone();
         thread::spawn(move || loop {
-            let mut buffer = libc::input_event {
-                time: libc::timeval {
+            let mut buffer = InputEvent {
+                time: TimeVal {
                     tv_sec: 0,
                     tv_usec: 0,
                 },
-                type_: 0,
+                r#type: 0,
                 code: 0,
                 value: 0,
             };
             unsafe {
-                read(
-                    event.as_raw_fd(),
-                    &mut buffer,
-                    size_of::<libc::input_event>(),
-                );
+                read(event.as_raw_fd(), &mut buffer, size_of::<InputEvent>());
             }
             tx.send(buffer).unwrap();
         });
@@ -107,7 +104,7 @@ fn start_nix_listener(
     thread::spawn(move || {
         for received in rx {
             // Construct the library's MouseEvent
-            let r#type = received.type_ as i32;
+            let r#type = received.r#type as i32;
             let code = received.code as i32;
             let val = received.value as i32;
 
@@ -165,5 +162,5 @@ fn start_nix_listener(
 }
 
 extern "C" {
-    fn read(fd: i32, buf: *mut libc::input_event, count: usize) -> i32;
+    fn read(fd: i32, buf: *mut InputEvent, count: usize) -> i32;
 }
