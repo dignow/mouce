@@ -134,8 +134,8 @@ impl UInputMouseManager {
                 tv_sec: 0,
                 tv_usec: 0,
             },
-            r#type: r#type as u16,
-            code: code as u16,
+            r#type: r#type as c_ushort,
+            code: code as c_ushort,
             value,
         };
         let fd = self.uinput_file.as_raw_fd();
@@ -181,8 +181,8 @@ impl UInputMouseManager {
         // behavior is the same on other projects that make use of
         // uinput. e.g. `ydotool`. When you try to move your mouse,
         // it will move 2x further pixels
-        self.emit(EV_REL, REL_X as i32, (x as f32 / 2.).ceil() as i32)?;
-        self.emit(EV_REL, REL_Y as i32, (y as f32 / 2.).ceil() as i32)?;
+        self.emit(EV_REL, REL_X as c_int, (x as f32 / 2.).ceil() as c_int)?;
+        self.emit(EV_REL, REL_Y as c_int, (y as f32 / 2.).ceil() as c_int)?;
         self.syncronize()
     }
 }
@@ -192,7 +192,7 @@ impl Drop for UInputMouseManager {
         let fd = self.uinput_file.as_raw_fd();
         unsafe {
             // Destroy the device, the file is closed automatically by the File module
-            ioctl(fd, UI_DEV_DESTROY as u64);
+            ioctl(fd, UI_DEV_DESTROY as c_ulong);
         }
     }
 }
@@ -207,8 +207,8 @@ impl MouseActions for UInputMouseManager {
         //self.move_relative(i32::MIN, i32::MIN)?;
         //self.move_relative(x as i32, y as i32)
 
-        self.emit(EV_ABS, ABS_X as i32, x as i32)?;
-        self.emit(EV_ABS, ABS_Y as i32, y as i32)?;
+        self.emit(EV_ABS, ABS_X as c_int, x as c_int)?;
+        self.emit(EV_ABS, ABS_Y as c_int, y as c_int)?;
         self.syncronize()
     }
 
@@ -254,7 +254,7 @@ impl MouseActions for UInputMouseManager {
             ScrollDirection::Left => (REL_HWHEEL, -1),
             ScrollDirection::Right => (REL_HWHEEL, 1),
         };
-        self.emit(EV_REL, code as i32, scroll_value)?;
+        self.emit(EV_REL, code as c_int, scroll_value)?;
         self.syncronize()
     }
 
@@ -286,7 +286,7 @@ impl MouseActions for UInputMouseManager {
     }
 }
 
-pub const O_NONBLOCK: i32 = 2048;
+pub const O_NONBLOCK: c_int = 2048;
 
 /// ioctl and uinput definitions
 const UI_ABS_SETUP: c_ulong = 1075598596;
@@ -333,8 +333,8 @@ struct InputId {
 #[repr(C)]
 pub struct InputEvent {
     pub time: TimeVal,
-    pub r#type: u16,
-    pub code: u16,
+    pub r#type: c_ushort,
+    pub code: c_ushort,
     pub value: c_int,
 }
 
