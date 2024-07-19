@@ -6,7 +6,12 @@ pub type CallbackId = u8;
 pub enum MouseButton {
     Left,
     Middle,
+    Side,
+    Extra,
     Right,
+    Back,
+    Forward,
+    Task,
 }
 
 #[cfg(not(any(

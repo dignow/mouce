@@ -38,6 +38,14 @@ impl X11MouseManager {
             MouseButton::Left => 1,
             MouseButton::Middle => 2,
             MouseButton::Right => 3,
+            MouseButton::Back => 8,
+            MouseButton::Forward => 9,
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("Unsupported button: {:?}", button),
+                ));
+            }
         };
         unsafe {
             XTestFakeButtonEvent(self.display, btn, is_press, 0);

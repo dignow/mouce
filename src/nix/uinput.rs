@@ -185,6 +185,19 @@ impl UInputMouseManager {
         self.emit(EV_REL, REL_Y as c_int, (y as f32 / 2.).ceil() as c_int)?;
         self.syncronize()
     }
+
+    fn map_btn(button: &MouseButton) -> c_int {
+        match button {
+            MouseButton::Left => BTN_LEFT,
+            MouseButton::Right => BTN_RIGHT,
+            MouseButton::Middle => BTN_MIDDLE,
+            MouseButton::Side => BTN_SIDE,
+            MouseButton::Extra => BTN_EXTRA,
+            MouseButton::Forward => BTN_FORWARD,
+            MouseButton::Back => BTN_BACK,
+            MouseButton::Task => BTN_TASK,
+        }
+    }
 }
 
 impl Drop for UInputMouseManager {
@@ -223,22 +236,12 @@ impl MouseActions for UInputMouseManager {
     }
 
     fn press_button(&mut self, button: &MouseButton) -> Result<()> {
-        let btn = match button {
-            MouseButton::Left => BTN_LEFT,
-            MouseButton::Right => BTN_RIGHT,
-            MouseButton::Middle => BTN_MIDDLE,
-        };
-        self.emit(EV_KEY, btn, 1)?;
+        self.emit(EV_KEY, Self::map_btn(button), 1)?;
         self.syncronize()
     }
 
     fn release_button(&mut self, button: &MouseButton) -> Result<()> {
-        let btn = match button {
-            MouseButton::Left => BTN_LEFT,
-            MouseButton::Right => BTN_RIGHT,
-            MouseButton::Middle => BTN_MIDDLE,
-        };
-        self.emit(EV_KEY, btn, 0)?;
+        self.emit(EV_KEY, Self::map_btn(button), 0)?;
         self.syncronize()
     }
 
@@ -310,6 +313,11 @@ pub const REL_WHEEL: c_uint = 0x08;
 pub const BTN_LEFT: c_int = 0x110;
 pub const BTN_RIGHT: c_int = 0x111;
 pub const BTN_MIDDLE: c_int = 0x112;
+pub const BTN_SIDE: c_int = 0x113;
+pub const BTN_EXTRA: c_int = 0x114;
+pub const BTN_FORWARD: c_int = 0x115;
+pub const BTN_BACK: c_int = 0x116;
+pub const BTN_TASK: c_int = 0x117;
 const SYN_REPORT: c_int = 0x00;
 const EV_SYN: c_int = 0x00;
 const BUS_USB: c_ushort = 0x03;
