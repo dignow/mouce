@@ -186,16 +186,31 @@ impl UInputMouseManager {
         self.syncronize()
     }
 
-    fn map_btn(button: &MouseButton) -> c_int {
+    fn map_btn(button: &MouseButton) -> Result<c_int> {
         match button {
-            MouseButton::Left => BTN_LEFT,
-            MouseButton::Right => BTN_RIGHT,
-            MouseButton::Middle => BTN_MIDDLE,
-            MouseButton::Side => BTN_SIDE,
-            MouseButton::Extra => BTN_EXTRA,
-            MouseButton::Forward => BTN_FORWARD,
-            MouseButton::Back => BTN_BACK,
-            MouseButton::Task => BTN_TASK,
+            MouseButton::Left => Ok(BTN_LEFT),
+            MouseButton::Right => Ok(BTN_RIGHT),
+            MouseButton::Middle => Ok(BTN_MIDDLE),
+            MouseButton::Side => Err(Error::new(
+                ErrorKind::InvalidInput,
+                "side button is not supported on uinput",
+            )),
+            MouseButton::Extra => Err(Error::new(
+                ErrorKind::InvalidInput,
+                "extra button is not supported on uinput",
+            )),
+            MouseButton::Forward => Err(Error::new(
+                ErrorKind::InvalidInput,
+                "forward button is not supported on uinput",
+            )),
+            MouseButton::Back => Err(Error::new(
+                ErrorKind::InvalidInput,
+                "back button is not supported on uinput",
+            )),
+            MouseButton::Task => Err(Error::new(
+                ErrorKind::InvalidInput,
+                "task button is not supported on uinput",
+            )),
         }
     }
 }
@@ -236,12 +251,12 @@ impl MouseActions for UInputMouseManager {
     }
 
     fn press_button(&mut self, button: &MouseButton) -> Result<()> {
-        self.emit(EV_KEY, Self::map_btn(button), 1)?;
+        self.emit(EV_KEY, Self::map_btn(button)?, 1)?;
         self.syncronize()
     }
 
     fn release_button(&mut self, button: &MouseButton) -> Result<()> {
-        self.emit(EV_KEY, Self::map_btn(button), 0)?;
+        self.emit(EV_KEY, Self::map_btn(button)?, 0)?;
         self.syncronize()
     }
 

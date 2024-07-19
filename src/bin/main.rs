@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .about("Listen mouse events and print them to the terminal")
         );
 
-    let mut mouse_manager = mouce::Mouse::new((0, 1920), (0, 1080));
+    let mut mouse_manager = mouce::Mouse::new((0, 1920), (0, 1080))?;
     let matches = app.get_matches();
 
     match matches.subcommand() {
@@ -120,10 +120,12 @@ fn get_mouse_button(
         "left" => Ok(mouce::common::MouseButton::Left),
         "right" => Ok(mouce::common::MouseButton::Right),
         "middle" => Ok(mouce::common::MouseButton::Middle),
+        "forward" => Ok(mouce::common::MouseButton::Forward),
+        "back" => Ok(mouce::common::MouseButton::Back),
         _ => Err(Box::new(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
-                "{} is not accepted as a button, please use left, right or middle",
+                "{} is not accepted as a button, please use left, right, middle, forward or back",
                 button
             ),
         ))),
