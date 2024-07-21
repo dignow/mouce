@@ -5,7 +5,10 @@
 /// - Unsupported mouse actions
 ///     - get_position is not available on uinput
 ///
-use crate::common::{CallbackId, MouseActions, MouseButton, MouseEvent, ScrollDirection};
+use crate::{
+    common::{CallbackId, MouseActions, MouseButton, MouseEvent, ScrollDirection},
+    nix::Callbacks,
+};
 use std::{
     collections::HashMap,
     fs::File,
@@ -24,7 +27,7 @@ const UINPUT_MAX_NAME_SIZE: usize = 80;
 
 pub struct UInputMouseManager {
     uinput_file: File,
-    callbacks: Arc<Mutex<HashMap<CallbackId, Box<dyn Fn(&MouseEvent) + Send>>>>,
+    callbacks: Callbacks,
     callback_counter: CallbackId,
     is_listening: bool,
 }
@@ -87,6 +90,7 @@ impl UInputMouseManager {
             ioctl(fd, UI_SET_RELBIT, REL_X);
             ioctl(fd, UI_SET_RELBIT, REL_Y);
             ioctl(fd, UI_SET_RELBIT, REL_WHEEL);
+            ioctl(fd, UI_SET_RELBIT, REL_HWHEEL);
         }
 
         let mut usetup = UInputSetup {
@@ -128,7 +132,7 @@ impl UInputMouseManager {
     }
 
     /// Write the given event to the uinput file
-    fn emit(&mut self, r#type: c_int, code: c_int, value: c_int) -> Result<()> {
+    fn emit(&self, r#type: c_int, code: c_int, value: c_int) -> Result<()> {
         let mut event = InputEvent {
             time: TimeVal {
                 tv_sec: 0,
@@ -143,12 +147,7 @@ impl UInputMouseManager {
         unsafe {
             let count = size_of::<InputEvent>();
             let written_bytes = write(fd, &mut event, count);
-            if written_bytes == -1 {
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    format!("failed while trying to write to a file"),
-                ));
-            } else if written_bytes != count as c_long {
+            if written_bytes == -1 || written_bytes != count as c_long {
                 return Err(Error::new(
                     ErrorKind::Other,
                     format!("failed while trying to write to a file"),
@@ -160,7 +159,7 @@ impl UInputMouseManager {
     }
 
     /// Syncronize the device
-    fn syncronize(&mut self) -> Result<()> {
+    fn syncronize(&self) -> Result<()> {
         self.emit(EV_SYN, SYN_REPORT, 0)?;
         // Give uinput some time to update the mouse location,
         // otherwise it fails to move the mouse on release mode
@@ -170,7 +169,7 @@ impl UInputMouseManager {
     }
 
     /// Move the mouse relative to the current position
-    fn move_relative(&mut self, x: i32, y: i32) -> Result<()> {
+    fn move_relative_(&self, x: i32, y: i32) -> Result<()> {
         // uinput does not move the mouse in pixels but uses `units`. I couldn't
         // find information regarding to this uinput `unit`, but according to
         // my findings 1 unit corresponds to exactly 2 pixels.
@@ -186,31 +185,16 @@ impl UInputMouseManager {
         self.syncronize()
     }
 
-    fn map_btn(button: &MouseButton) -> Result<c_int> {
+    fn map_btn(button: &MouseButton) -> c_int {
         match button {
-            MouseButton::Left => Ok(BTN_LEFT),
-            MouseButton::Right => Ok(BTN_RIGHT),
-            MouseButton::Middle => Ok(BTN_MIDDLE),
-            MouseButton::Side => Err(Error::new(
-                ErrorKind::InvalidInput,
-                "side button is not supported on uinput",
-            )),
-            MouseButton::Extra => Err(Error::new(
-                ErrorKind::InvalidInput,
-                "extra button is not supported on uinput",
-            )),
-            MouseButton::Forward => Err(Error::new(
-                ErrorKind::InvalidInput,
-                "forward button is not supported on uinput",
-            )),
-            MouseButton::Back => Err(Error::new(
-                ErrorKind::InvalidInput,
-                "back button is not supported on uinput",
-            )),
-            MouseButton::Task => Err(Error::new(
-                ErrorKind::InvalidInput,
-                "task button is not supported on uinput",
-            )),
+            MouseButton::Left => BTN_LEFT,
+            MouseButton::Right => BTN_RIGHT,
+            MouseButton::Middle => BTN_MIDDLE,
+            MouseButton::Side => BTN_SIDE,
+            MouseButton::Extra => BTN_EXTRA,
+            MouseButton::Forward => BTN_FORWARD,
+            MouseButton::Back => BTN_BACK,
+            MouseButton::Task => BTN_TASK,
         }
     }
 }
@@ -226,7 +210,7 @@ impl Drop for UInputMouseManager {
 }
 
 impl MouseActions for UInputMouseManager {
-    fn move_to(&mut self, x: usize, y: usize) -> Result<()> {
+    fn move_to(&self, x: usize, y: usize) -> Result<()> {
         // // For some reason, absolute mouse move events are not working on uinput
         // // (as I understand those events are intended for touch events)
         // //
@@ -240,8 +224,8 @@ impl MouseActions for UInputMouseManager {
         self.syncronize()
     }
 
-    fn move_relative(&mut self, x_offset: i32, y_offset: i32) -> Result<()> {
-        self.move_relative(x_offset, y_offset)
+    fn move_relative(&self, x_offset: i32, y_offset: i32) -> Result<()> {
+        self.move_relative_(x_offset, y_offset)
     }
 
     fn get_position(&self) -> Result<(i32, i32)> {
@@ -250,22 +234,22 @@ impl MouseActions for UInputMouseManager {
         unimplemented!()
     }
 
-    fn press_button(&mut self, button: &MouseButton) -> Result<()> {
-        self.emit(EV_KEY, Self::map_btn(button)?, 1)?;
+    fn press_button(&self, button: &MouseButton) -> Result<()> {
+        self.emit(EV_KEY, Self::map_btn(button), 1)?;
         self.syncronize()
     }
 
-    fn release_button(&mut self, button: &MouseButton) -> Result<()> {
-        self.emit(EV_KEY, Self::map_btn(button)?, 0)?;
+    fn release_button(&self, button: &MouseButton) -> Result<()> {
+        self.emit(EV_KEY, Self::map_btn(button), 0)?;
         self.syncronize()
     }
 
-    fn click_button(&mut self, button: &MouseButton) -> Result<()> {
-        self.press_button(&button)?;
-        self.release_button(&button)
+    fn click_button(&self, button: &MouseButton) -> Result<()> {
+        self.press_button(button)?;
+        self.release_button(button)
     }
 
-    fn scroll_wheel(&mut self, direction: &ScrollDirection) -> Result<()> {
+    fn scroll_wheel(&self, direction: &ScrollDirection) -> Result<()> {
         let (code, scroll_value) = match direction {
             ScrollDirection::Up => (REL_WHEEL, 1),
             ScrollDirection::Down => (REL_WHEEL, -1),
@@ -323,8 +307,8 @@ pub const REL_X: c_uint = 0x00;
 pub const REL_Y: c_uint = 0x01;
 pub const ABS_X: c_uint = 0x00;
 pub const ABS_Y: c_uint = 0x01;
-pub const REL_HWHEEL: c_uint = 0x06;
 pub const REL_WHEEL: c_uint = 0x08;
+pub const REL_HWHEEL: c_uint = 0x06;
 pub const BTN_LEFT: c_int = 0x110;
 pub const BTN_RIGHT: c_int = 0x111;
 pub const BTN_MIDDLE: c_int = 0x112;

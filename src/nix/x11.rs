@@ -2,7 +2,10 @@
 /// This module contains the mouse action functions
 /// for the unix-like systems that use X11
 ///
-use crate::common::{CallbackId, MouseActions, MouseButton, MouseEvent, ScrollDirection};
+use crate::{
+    common::{CallbackId, MouseActions, MouseButton, MouseEvent, ScrollDirection},
+    nix::Callbacks,
+};
 use std::{
     collections::HashMap,
     io::{Error, ErrorKind, Result},
@@ -13,7 +16,7 @@ use std::{
 pub struct X11MouseManager {
     display: *mut Display,
     window: Window,
-    callbacks: Arc<Mutex<HashMap<CallbackId, Box<dyn Fn(&MouseEvent) + Send>>>>,
+    callbacks: Callbacks,
     callback_counter: CallbackId,
     is_listening: bool,
 }
@@ -56,7 +59,7 @@ impl X11MouseManager {
 }
 
 impl MouseActions for X11MouseManager {
-    fn move_to(&mut self, x: usize, y: usize) -> Result<()> {
+    fn move_to(&self, x: usize, y: usize) -> Result<()> {
         unsafe {
             XWarpPointer(self.display, 0, self.window, 0, 0, 0, 0, x as i32, y as i32);
             XFlush(self.display);
@@ -93,20 +96,20 @@ impl MouseActions for X11MouseManager {
         Ok((x, y))
     }
 
-    fn press_button(&mut self, button: &MouseButton) -> Result<()> {
+    fn press_button(&self, button: &MouseButton) -> Result<()> {
         self.button_event(button, true)
     }
 
-    fn release_button(&mut self, button: &MouseButton) -> Result<()> {
+    fn release_button(&self, button: &MouseButton) -> Result<()> {
         self.button_event(button, false)
     }
 
-    fn click_button(&mut self, button: &MouseButton) -> Result<()> {
+    fn click_button(&self, button: &MouseButton) -> Result<()> {
         self.press_button(button)?;
         self.release_button(button)
     }
 
-    fn scroll_wheel(&mut self, direction: &ScrollDirection) -> Result<()> {
+    fn scroll_wheel(&self, direction: &ScrollDirection) -> Result<()> {
         let btn = match direction {
             ScrollDirection::Up => 4,
             ScrollDirection::Down => 5,

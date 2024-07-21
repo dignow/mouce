@@ -11,17 +11,20 @@ use glob::glob;
 use std::{
     collections::HashMap,
     fs::File,
-    io::Result,
+    io::{self, Result},
     mem::size_of,
     os::unix::io::AsRawFd,
-    process::Command,
-    str::from_utf8,
     sync::{mpsc, Arc, Mutex},
     thread,
 };
+#[cfg(feature = "x11")]
+use std::{process::Command, str::from_utf8};
+#[cfg(feature = "x11")]
+mod x11;
 
 mod uinput;
-mod x11;
+
+type Callbacks = Arc<Mutex<HashMap<CallbackId, Box<dyn Fn(&MouseEvent) + Send>>>>;
 
 pub use uinput::UInputMouseManager;
 pub use x11::X11MouseManager;
@@ -31,26 +34,20 @@ pub struct NixMouseManager {}
 impl NixMouseManager {
     /// rng_x and rng_y is used by uinput mouse.
     /// As for x11, the params can be (0, 0), (0, 0)
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(rng_x: (i32, i32), rng_y: (i32, i32)) -> Result<Box<dyn MouseActions>> {
-        // Try to identify the display manager using loginctl, if it fails
-        // read the environment variable $XDG_SESSION_TYPE
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg("loginctl show-session $(loginctl | awk '/tty/ {print $1}') -p Type | awk -F= '{print $2}'")
-            .output()
-            .unwrap_or(
-                Command::new("sh")
-                    .arg("-c")
-                    .arg("echo $XDG_SESSION_TYPE")
-                    .output().unwrap()
-                );
-
-        let display_manager = from_utf8(&output.stdout).unwrap().trim();
-
-        match display_manager {
-            "x11" => Ok(Box::new(x11::X11MouseManager::new())),
-            // If the display manager is unknown default to uinput
-            _ => Ok(Box::new(uinput::UInputMouseManager::new(rng_x, rng_y)?)),
+        #[cfg(feature = "x11")]
+        {
+            if is_x11() {
+                Ok(Box::new(x11::X11MouseManager::new()))
+            } else {
+                Ok(Box::new(uinput::UInputMouseManager::new(rng_x, rng_y)?))
+            }
+        }
+        #[cfg(not(feature = "x11"))]
+        {
+            // If x11 feature is disabled, just return uinput mouse manager
+            return Ok(Box::new(uinput::UInputMouseManager::new(rng_x, rng_y)?));
         }
     }
 
@@ -64,19 +61,57 @@ impl NixMouseManager {
 }
 
 /// Start the event listener for nix systems
-fn start_nix_listener(
-    callbacks: &Arc<Mutex<HashMap<CallbackId, Box<dyn Fn(&MouseEvent) + Send>>>>,
-) -> Result<()> {
+fn start_nix_listener(callbacks: &Callbacks) -> Result<()> {
     let (tx, rx) = mpsc::channel();
 
-    // Read all the mouse events listed under /dev/input/by-id
-    // by-id directory is a collection of symlinks to /dev/input/event*
+    let mut previous_paths = vec![];
+    // Read all the mouse events listed under /dev/input/by-id and
+    // /dev/input/by-path. These directories are collections of symlinks
+    // to /dev/input/event*
+    //
     // I am only interested in the ones that end with `-event-mouse`
-    for file in glob("/dev/input/by-id/*-event-mouse").expect("Failed to read glob pattern") {
-        let path = file
-            .expect("Failed because of an IO error")
-            .display()
-            .to_string();
+    for file in glob("/dev/input/by-id/*-event-mouse")
+        .map_err(|e| {
+            io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to read by-id glob pattern, {}", e),
+            )
+        })?
+        .chain(glob("/dev/input/by-path/*-event-mouse").map_err(|e| {
+            io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to read by-path glob pattern, {}", e),
+            )
+        })?)
+    {
+        let mut file = file.map_err(|e| {
+            io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed because of an IO error, {}", e),
+            )
+        })?;
+
+        // Get the link if it exists
+        if let Ok(rel_path) = file.read_link() {
+            if rel_path.is_absolute() {
+                file = rel_path;
+            } else {
+                // Remove the file name from the path buffer, leaving us with path to directory
+                file.pop();
+                // Push the relative path of the link (e.g. `../event8`)
+                file.push(rel_path);
+                // Get the absolute path to final path
+                file = std::fs::canonicalize(file)?;
+            }
+        }
+
+        let path = file.display().to_string();
+
+        if previous_paths.contains(&path) {
+            continue;
+        }
+
+        previous_paths.push(path.clone());
 
         let event = File::options().read(true).open(path)?;
 
@@ -95,7 +130,7 @@ fn start_nix_listener(
             unsafe {
                 read(event.as_raw_fd(), &mut buffer, size_of::<InputEvent>());
             }
-            tx.send(buffer).unwrap();
+            tx.send(buffer).ok();
         });
     }
 
@@ -159,6 +194,32 @@ fn start_nix_listener(
     });
 
     Ok(())
+}
+
+#[cfg(feature = "x11")]
+fn is_x11() -> bool {
+    // Try to verify x11 using loginctl
+    let loginctl_output = Command::new("sh")
+        .arg("-c")
+        .arg("loginctl show-session $(loginctl | awk '/tty/ {print $1}') -p Type --value")
+        .output();
+
+    if let Ok(out) = loginctl_output {
+        if let Ok(typ) = from_utf8(&out.stdout) {
+            if typ.trim().to_lowercase() == "x11" {
+                return true;
+            }
+        }
+    }
+
+    // If loginctl fails try to read the environment variable $XDG_SESSION_TYPE
+    if let Ok(session_type) = std::env::var("XDG_SESSION_TYPE") {
+        if session_type.trim().to_lowercase() == "x11" {
+            return true;
+        }
+    }
+
+    false
 }
 
 extern "C" {

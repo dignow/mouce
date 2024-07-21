@@ -23,6 +23,7 @@ pub struct WindowsMouseManager {
 }
 
 impl WindowsMouseManager {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> Result<Box<dyn MouseActions>> {
         Ok(Box::new(WindowsMouseManager {
             callback_counter: 0,
@@ -31,14 +32,14 @@ impl WindowsMouseManager {
     }
 
     fn send_input(&self, event: WindowsMouseEvent, mouse_data: i32) -> Result<()> {
-        let (x, y) = self.get_position()?;
+        let (x, y) = self.get_position_raw()?;
         let mut input = Input {
             r#type: INPUT_MOUSE,
             mi: MouseInput {
                 dx: x,
                 dy: y,
                 mouse_data,
-                dw_flags: event as u32,
+                dw_flags: event as DWord,
                 time: 0,
                 dw_extra_info: unsafe { GetMessageExtraInfo() as *mut c_ulong },
             },
@@ -67,7 +68,12 @@ impl WindowsMouseManager {
                 let mouse_event = match w_param {
                     WM_MOUSEMOVE => {
                         let (x, y) = get_point(lpdata);
-                        Some(MouseEvent::AbsoluteMove(x, y))
+                        match (x.try_into(), y.try_into()) {
+                            (Ok(x), Ok(y)) => Some(MouseEvent::AbsoluteMove(x, y)),
+                            _ => {
+                                return CallNextHookEx(HOOK, code, param, lpdata);
+                            }
+                        }
                     }
                     WM_LBUTTONDOWN => Some(MouseEvent::Press(MouseButton::Left)),
                     WM_MBUTTONDOWN => Some(MouseEvent::Press(MouseButton::Middle)),
@@ -111,6 +117,23 @@ impl WindowsMouseManager {
 
         Ok(())
     }
+
+    // Return the mouse position (c_long, c_long), but it does not directly
+    // comply with mouce interface, so we first fetch the positions here
+    // then try to convert it to (i32, i32) within the trait implementation
+    fn get_position_raw(&self) -> Result<(c_long, c_long)> {
+        let mut out = Point { x: 0, y: 0 };
+        unsafe {
+            let result = GetCursorPos(&mut out);
+            if result == 0 {
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    "failed to get the cursor position",
+                ));
+            }
+        }
+        return Ok((out.x, out.y));
+    }
 }
 
 impl Drop for WindowsMouseManager {
@@ -139,17 +162,16 @@ impl MouseActions for WindowsMouseManager {
     }
 
     fn get_position(&self) -> Result<(i32, i32)> {
-        let mut out = Point { x: 0, y: 0 };
-        unsafe {
-            let result = GetCursorPos(&mut out);
-            if result == 0 {
-                return Err(Error::new(
+        match self.get_position_raw() {
+            Ok((x, y)) => match (x.try_into(), y.try_into()) {
+                (Ok(x), Ok(y)) => Ok((x, y)),
+                _ => Err(Error::new(
                     ErrorKind::Other,
-                    "failed to get the cursor position",
-                ));
-            }
+                    "Failed to convert position to i32",
+                )),
+            },
+            Err(e) => Err(e),
         }
-        return Ok((out.x, out.y));
     }
 
     fn press_button(&self, button: &MouseButton) -> Result<()> {
@@ -157,9 +179,19 @@ impl MouseActions for WindowsMouseManager {
             MouseButton::Left => WindowsMouseEvent::LeftDown,
             MouseButton::Middle => WindowsMouseEvent::MiddleDown,
             MouseButton::Right => WindowsMouseEvent::RightDown,
+            MouseButton::Back => WindowsMouseEvent::XDown,
+            MouseButton::Forward => WindowsMouseEvent::XDown,
+            _ => {
+                return Err(Error::new(ErrorKind::Other, "Not supported mouse button"));
+            }
+        };
+        let mouse_data = match button {
+            MouseButton::Back => WindowsMouseButton::XButton1 as _,
+            MouseButton::Forward => WindowsMouseButton::XButton2 as _,
+            _ => 0,
         };
 
-        self.send_input(event, 0)
+        self.send_input(event, mouse_data)
     }
 
     fn release_button(&self, button: &MouseButton) -> Result<()> {
@@ -167,9 +199,18 @@ impl MouseActions for WindowsMouseManager {
             MouseButton::Left => WindowsMouseEvent::LeftUp,
             MouseButton::Middle => WindowsMouseEvent::MiddleUp,
             MouseButton::Right => WindowsMouseEvent::RightUp,
+            MouseButton::Back => WindowsMouseEvent::XUp,
+            MouseButton::Forward => WindowsMouseEvent::XUp,
+            _ => {
+                return Err(Error::new(ErrorKind::Other, "Not supported mouse button"));
+            }
         };
-
-        self.send_input(event, 0)
+        let mouse_data = match button {
+            MouseButton::Back => WindowsMouseButton::XButton1 as _,
+            MouseButton::Forward => WindowsMouseButton::XButton2 as _,
+            _ => 0,
+        };
+        self.send_input(event, mouse_data)
     }
 
     fn click_button(&self, button: &MouseButton) -> Result<()> {
@@ -320,8 +361,16 @@ enum WindowsMouseEvent {
     RightUp = 0x0010,
     MiddleDown = 0x0020,
     MiddleUp = 0x0040,
+    XDown = 0x0080,
+    XUp = 0x0100,
     Wheel = 0x0800,
     HWheel = 0x01000,
+}
+
+#[repr(C)]
+enum WindowsMouseButton {
+    XButton1 = 0x0001,
+    XButton2 = 0x0002,
 }
 
 #[repr(C)]

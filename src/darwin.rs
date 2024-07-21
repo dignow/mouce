@@ -24,6 +24,7 @@ pub struct DarwinMouseManager {
 }
 
 impl DarwinMouseManager {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> Result<Box<dyn MouseActions>> {
         Ok(Box::new(DarwinMouseManager {
             callback_counter: 0,
@@ -54,12 +55,33 @@ impl DarwinMouseManager {
         Ok(())
     }
 
-    fn create_scroll_wheel_event(&self, distance: c_int) -> Result<()> {
+    fn create_scroll_wheel_event(
+        &self,
+        distance: c_int,
+        direction: &ScrollDirection,
+    ) -> Result<()> {
         unsafe {
-            let event =
-                CGEventCreateScrollWheelEvent(null_mut(), CGScrollEventUnit::Line, 1, distance);
+            let event = match direction {
+                ScrollDirection::Up | ScrollDirection::Down => CGEventCreateScrollWheelEvent(
+                    null_mut(),
+                    CGScrollEventUnit::Line,
+                    2,
+                    distance,
+                    0,
+                ),
+                ScrollDirection::Right | ScrollDirection::Left => CGEventCreateScrollWheelEvent(
+                    null_mut(),
+                    CGScrollEventUnit::Line,
+                    2,
+                    0,
+                    distance,
+                ),
+            };
             if event == null_mut() {
-                return Err(Error::CGCouldNotCreateEvent);
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    "CoreGraphic: failed to create mouse event",
+                ));
             }
             CGEventPost(CGEventTapLocation::CGHIDEventTap, event);
             CFRelease(event as CFTypeRef);
@@ -89,11 +111,20 @@ impl DarwinMouseManager {
                     }
                     CGEventType::ScrollWheel => {
                         // CGEventField::scrollWheelEventPointDeltaAxis1 = 96
-                        let delta = CGEventGetIntegerValueField(cg_event, 96);
-                        if delta > 0 {
+                        // CGEventField::scrollWheelEventPointDeltaAxis2 = 97
+                        let delta_y = CGEventGetIntegerValueField(cg_event, 96);
+                        let delta_x = CGEventGetIntegerValueField(cg_event, 97);
+                        if delta_y > 0 {
                             Some(MouseEvent::Scroll(ScrollDirection::Up))
-                        } else {
+                        } else if delta_y < 0 {
                             Some(MouseEvent::Scroll(ScrollDirection::Down))
+                        } else if delta_x < 0 {
+                            Some(MouseEvent::Scroll(ScrollDirection::Right))
+                        } else if delta_x > 0 {
+                            Some(MouseEvent::Scroll(ScrollDirection::Left))
+                        } else {
+                            // Probably axis3 wheel scrolled
+                            None
                         }
                     }
                     _ => None,
@@ -112,8 +143,7 @@ impl DarwinMouseManager {
             }
 
             unsafe {
-                // Create the mouse listener hook
-                TAP_EVENT_REF = Some(CGEventTapCreate(
+                let tap = CGEventTapCreate(
                     CGEventTapLocation::CGHIDEventTap,
                     CGEventTapPlacement::HeadInsertEventTap,
                     CGEventTapOption::ListenOnly as u32,
@@ -127,13 +157,14 @@ impl DarwinMouseManager {
                         + (1 << CGEventType::ScrollWheel as u64),
                     Some(mouse_on_event_callback),
                     null_mut(),
-                ));
+                );
+                // Create the mouse listener hook
+                TAP_EVENT_REF = Some(tap);
 
-                let loop_source =
-                    CFMachPortCreateRunLoopSource(null_mut(), TAP_EVENT_REF.unwrap(), 0);
+                let loop_source = CFMachPortCreateRunLoopSource(null_mut(), tap, 0);
                 let current_loop = CFRunLoopGetCurrent();
                 CFRunLoopAddSource(current_loop, loop_source, kCFRunLoopDefaultMode);
-                CGEventTapEnable(TAP_EVENT_REF.unwrap(), true);
+                CGEventTapEnable(tap, true);
                 CFRunLoopRun();
             }
         });
@@ -166,7 +197,7 @@ impl MouseActions for DarwinMouseManager {
         unsafe {
             let result = CGWarpMouseCursorPosition(cg_point);
             if result != CGError::Success {
-                return Err(Error::form(
+                return Err(Error::new(
                     ErrorKind::Other,
                     "Failed to move the mouse, CGError is not Success",
                 ));
@@ -180,7 +211,7 @@ impl MouseActions for DarwinMouseManager {
         unsafe {
             let event = CGEventCreate(null_mut());
             if event == null_mut() {
-                return Err(Error::form(ErrorKind::Other, "CGCouldNotCreateEvent"));
+                return Err(Error::new(ErrorKind::Other, "CGCouldNotCreateEvent"));
             }
             let cursor = CGEventGetLocation(event);
             CFRelease(event as CFTypeRef);
@@ -193,6 +224,12 @@ impl MouseActions for DarwinMouseManager {
             MouseButton::Left => (CGEventType::LeftMouseDown, CGMouseButton::Left),
             MouseButton::Middle => (CGEventType::OtherMouseDown, CGMouseButton::Center),
             MouseButton::Right => (CGEventType::RightMouseDown, CGMouseButton::Right),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    format!("Not supported mouse event"),
+                ));
+            }
         };
         self.create_mouse_event(event_type, mouse_button)?;
         Ok(())
@@ -203,6 +240,12 @@ impl MouseActions for DarwinMouseManager {
             MouseButton::Left => (CGEventType::LeftMouseUp, CGMouseButton::Left),
             MouseButton::Middle => (CGEventType::OtherMouseUp, CGMouseButton::Center),
             MouseButton::Right => (CGEventType::RightMouseUp, CGMouseButton::Right),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    format!("Not supported mouse event"),
+                ));
+            }
         };
         self.create_mouse_event(event_type, mouse_button)
     }
@@ -214,10 +257,10 @@ impl MouseActions for DarwinMouseManager {
 
     fn scroll_wheel(&self, direction: &ScrollDirection) -> Result<()> {
         let distance = match direction {
-            ScrollDirection::Up => 5,
-            ScrollDirection::Down => -5,
+            ScrollDirection::Up | ScrollDirection::Left => 5,
+            ScrollDirection::Down | ScrollDirection::Right => -5,
         };
-        self.create_scroll_wheel_event(distance)
+        self.create_scroll_wheel_event(distance, direction)
     }
 
     fn hook(&mut self, callback: Box<dyn Fn(&MouseEvent) + Send>) -> Result<CallbackId> {
@@ -386,8 +429,12 @@ extern "C" {
     fn CGEventCreateScrollWheelEvent(
         source: CGEventSourceRef,
         units: CGScrollEventUnit,
+        // Number of scroll directions/wheels, maximum is 3
         wheel_count: c_int,
+        // Vertical wheel movement distance
         wheel1: c_int,
+        // Horizontal wheel movement distance
+        wheel2: c_int,
     ) -> CGEventRef;
     fn CGEventPost(tap: CGEventTapLocation, event: CGEventRef);
     fn CGEventTapCreate(
